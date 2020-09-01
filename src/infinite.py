@@ -58,10 +58,8 @@ def get_kernel_martix(B1, B2, EPS=1e-12):
 
 
 class MultiNeuron(nn.Module):
-    def __init__(self, m, d, EPS=1e-12, rf=False, mf=False, reproduce=True):
+    def __init__(self, m, d, EPS=1e-12, rf=False, mf=False):
         super(MultiNeuron, self).__init__()
-        if reproduce:
-            torch.manual_seed(123)
 
         a = torch.zeros(m)
         B = torch.randn(m, d)
@@ -116,7 +114,7 @@ class MultiNeuron(nn.Module):
 
 
 class Train:
-    def __init__(self, m, d, target='one-neuron', rf=False, mf=False, reproduce=False):
+    def __init__(self, m, d, target='one-neuron', rf=False, mf=False, m_target=10):
         self.nepoch_r = []
         self.loss_r = []
         self.a_r = []
@@ -125,7 +123,7 @@ class Train:
         self.m = m
         self.d = d
  
-        self.net = MultiNeuron(m, d, rf=rf, mf=mf, reproduce=reproduce)
+        self.net = MultiNeuron(m, d, rf=rf, mf=mf)
         a_st, B_st = get_target(d, target, m_target)
         self.net.set_target(a_st, B_st)
 
@@ -134,6 +132,8 @@ class Train:
             plot_epoch=1000, check_epoch=-1, solver='gd'):
         if solver == 'gd':
             optimizer = optim.SGD(self.net.parameters(), lr=learning_rate)
+        elif solver == 'momentum':
+            optimizer = optim.SGD(self.net.parameters(),lr=learning_rate, momentum=0.9)
         elif solver == 'adam':
             optimizer = optim.Adam(self.net.parameters(), lr=learning_rate)
         else:
@@ -145,7 +145,6 @@ class Train:
             loss.backward()
             optimizer.step()
 
-            self.loss_r.append(loss.item())
 
             if epoch%plot_epoch == 0:
                 print('[{:}/{:}], {:.1e}'.format(epoch+1, nepochs, loss.item()))
@@ -153,9 +152,10 @@ class Train:
                 break
 
             if check_epoch>0 and epoch%check_epoch == 0:
-                a = self.net.a.data.to(cpu).clone()
-                B = self.net.B.data.to(cpu).clone()
+                a = self.net.a.data.to(cpu).clone().tolist()
+                B = self.net.B.data.to(cpu).clone().tolist()
 
                 self.a_r.append(a)
                 self.B_r.append(B)
                 self.nepoch_r.append(epoch+1)
+                self.loss_r.append(loss.item())

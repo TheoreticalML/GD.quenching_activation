@@ -25,7 +25,7 @@ def minimum_norm_solver(A, b):
     x = np.matmul(Vh.transpose(), z)
     return x
 
-def get_data(n_tr, n_te, d, target='one-neuron'):
+def get_data(n_tr, n_te, d, target='one-neuron', m_target=10):
     x_tr = torch.randn(n_tr, d).to(device)
     x_te = torch.randn(n_te, d).to(device)
 
@@ -38,16 +38,16 @@ def get_data(n_tr, n_te, d, target='one-neuron'):
         y_te = x_te[:,0]
 
     elif target == 'multi-neuron':
-        m = 20
+        m = m_target
         w = torch.randn(m, d)
         w[:,10:] = 0
         w /= w.norm(dim=1, keepdim=True)
 
         f = x_tr.matmul(w.t())
-        y_tr = nonlinear(f).mean(dim=1)
+        y_tr = F.relu(f).mean(dim=1)
 
         f = x_te.matmul(w.t())
-        y_te = nonlinear(f).mean(dim=1)
+        y_te = F.relu(f).mean(dim=1)
 
     elif target == 'circle':
         m = 1000
@@ -106,12 +106,12 @@ class Network(nn.Module):
 
 class Train:
     def __init__(self, m, n, d, n_te=10000,
-            target='one-neuron', rf=False, mf=False, save_aB=False):
+            target='one-neuron', m_target=10, rf=False, mf=False, save_aB=False):
         self.m = m
         self.n = n
         self.d = d
         self.net = Network(d, m, rf=rf, mf=mf)
-        self.x_tr, self.y_tr, self.x_te, self.y_te = get_data(n, n_te, d, target)
+        self.x_tr, self.y_tr, self.x_te, self.y_te = get_data(n, n_te, d, target, m_target)
 
         self.loss_tr_r = []
         self.loss_te_r = []
@@ -124,9 +124,17 @@ class Train:
             self.B_r = []
 
     def run(self, nepochs=1000, learning_rate=5e-3, TOL=1e-5,
-            plot_epoch=500, check_epoch=-1, solver='gd'):
+            plot_epoch=500, check_epoch=-1, solver='gd', batch_size=-1):
+        """
+        if batch_size != -1, mini-batch are used
+        """
+        n_tr = len(self.y_tr)
+        if batch_size == -1:
+            batch_size = n_tr
         if solver == 'gd':
             optimizer = optim.SGD(self.net.parameters(), lr=learning_rate)
+        elif solver == 'momentum':
+            optimizer = optim.SGD(self.net.parameters(),lr=learning_rate, momentum=0.9)
         elif solver == 'adam':
             optimizer = optim.Adam(self.net.parameters(), lr=learning_rate)
         else:
@@ -134,17 +142,24 @@ class Train:
 
 
         for epoch in range(nepochs):
-            optimizer.zero_grad()
-            y_pre = self.net(self.x_tr)
-            loss = (y_pre - self.y_tr).pow(2).mean()
-            loss.backward()
-            optimizer.step()
+            loss_tot, nbatch = 0, 0
+            for i in range(0, n_tr, batch_size):
+                j = min(i+batch_size, n_tr)
+                x_b, y_b = self.x_tr[i:j, :], self.y_tr[i:j]
+                
+                optimizer.zero_grad()
+                y_p = self.net(x_b)
+                loss = (y_p - y_b).pow(2).mean()
+                loss.backward()
+                optimizer.step()
+                nbatch += 1
+                loss_tot += loss.item()
 
             if epoch%plot_epoch == 0:
-                print('{:}-th iter, loss: {:.1e}'.format(epoch, loss.item()))
+                print('{:}-th iter, loss: {:.1e}'.format(epoch, loss_tot/nbatch))
 
             if check_epoch>=1 and epoch%check_epoch==0:
-                self.loss_tr_r.append(loss.item())
+                self.loss_tr_r.append(loss_tot/nbatch)
                 self.loss_te_r.append(self.validate())
                 self.pnorm_r.append(self.net.path_norm())
                 self.nepoch_r.append(epoch+1)
@@ -156,7 +171,7 @@ class Train:
                     self.a_r.append(a)
                     self.B_r.append(B)
 
-            if loss.item() < TOL:
+            if loss_tot/nbatch < TOL:
                 break
 
     def validate(self, batch_size=100):
